@@ -1,0 +1,430 @@
+---
+title: "Bicycle Count Forecasting"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+author: "Berta Pla (Clearpeaks)"
+date: "July 2024"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+    toc_depth: 3
+---
+
+<style>
+#toc ul.nav li ul li {
+    display: none;
+    max-height: none;
+}
+
+#toc ul.nav li.active ul li  {
+    display: block;
+    max-height: none;
+}
+
+#toc ul.nav li ul li ul li {
+    max-height: none;
+    display: none !important;
+}
+
+#toc ul.nav li ul li.active ul li {
+    max-height: none;
+    display: block !important;
+}
+</style>
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = FALSE, warning = FALSE, message = FALSE)
+set.seed(23)
+```
+
+# 1. Introduction
+
+The objective of this use case is to forecast bicycle traffic in Paris for 2024 using historical data and compare the predictions with real-time data. This use case illustrates the process of analyzing historical data, generating forecasts, and visualizing both forecasted and real-time data. It also demonstrates how to set up an automated pipeline to update and visualize real-time data continuously, providing valuable insights for urban planning and promoting sustainable transportation.
+
+# 2. Dataset
+
+What happens if i add this here?
+
+# 3. Step-by-Step Process
+
+## Loading the data
+
+The first step in our analysis of the Paris bike count data is to download and process the data. For this, we use a separate script, $\texttt{load_bike_data.R}$, which handles the downloading, extraction, and consolidation of the data files into a single dataframe. This script saves the resulting dataframe as an RDS file in the data folder of our project repository. Here is a detailed explanation of what the script does:
+
+1. Define the Download Directory:
+    
+    The script begins by defining the directory where the data will be downloaded. If the directory does not exist, it is created. This ensures that there is a specific location on our local machine to store the downloaded files, avoiding clutter and making file management easier.
+    
+    ```{r, eval=FALSE}
+    download_dir <- "destination/path/for/data/historique_comptage_velo"
+    
+    if (!file.exists(download_dir)) {
+      dir.create(download_dir)
+    }
+    ```
+    \
+2. Define the Base URL and Years:
+
+    The script specifies the base URL for downloading the data and the range of years for which the data is required. This setup allows us to dynamically construct the download URLs for multiple years, ensuring that we can systematically fetch data for the desired time period.
+    
+    ```{r, eval=FALSE}
+    base_url <- "https://parisdata.opendatasoft.com/api/datasets/1.0/comptage-velo-historique-donnees-compteurs/attachments/"
+    years <- 2017:2023
+    ```
+    \
+3. Define Possible URL Suffixes:
+
+    It defines possible URL suffixes that correspond to the different naming conventions used for the data files.This step is necessary because, upon exploring the website, we found that the zip files for some years might have different naming structures. Including these variations helps ensure that we can successfully locate and download the files regardless of these differences.
+    
+    ```{r, eval=FALSE}
+    url_suffixes <- c("_comptage_velo_donnees_sites_comptage_csv_zip/", 
+                      "_comptage_velo_donnees_sites_comptage_zip/")
+    ```
+    \
+4. Download the Data Files:
+
+    The script loops through each year and attempts to download the corresponding zip file. If the download is successful, it proceeds to the next year; otherwise, it tries the next suffix option.
+    
+    ```{r, eval=FALSE}
+    for (year in years) {
+      success <- FALSE
+      for (suffix in url_suffixes) {
+        url <- paste0(base_url, year, suffix)
+        filename <- paste0(year, "_comptage_velo.zip")
+        filepath <- file.path(download_dir, filename)
+        
+        tryCatch({
+          download.file(url, destfile = filepath, mode = "wb")
+          success <- TRUE
+          cat(sprintf("Downloaded %s from %s\n", filename, url))
+          break
+        }, error = function(e) {
+          cat(sprintf("Failed to download from %s. Trying next option...\n", url))
+        })
+      }
+      
+      if (!success) {
+        cat(sprintf("Failed to download %s after trying all options.\n", filename))
+      }
+    }
+    ```
+    \
+5. Extract the CSV Files:
+
+    Once all the zip files are downloaded, the script extracts the CSV files from them. It moves the extracted CSV files to the download directory and renames them appropriately.
+    
+    ```{r, eval=FALSE}
+    zip_files <- list.files(download_dir, pattern = "\\.zip$", full.names = TRUE)
+    
+    extract_csv <- function(zip_file) {
+      temp_dir <- tempdir()
+      unzip(zip_file, exdir = temp_dir)
+      extracted_files <- list.files(temp_dir, full.names = TRUE)
+      csv_files <- grep("\\.csv$", extracted_files, value = TRUE)
+      
+      if (length(csv_files) > 0) {
+        for (csv_file in csv_files) {
+          zip_filename <- basename(zip_file)
+          csv_filename <- sub("\\.zip$", ".csv", zip_filename)
+          dest_file <- file.path(download_dir, csv_filename)
+          file.copy(csv_file, dest_file, overwrite = TRUE)
+          cat(sprintf("Extracted %s to %s\n", csv_file, dest_file))
+        }
+      } else {
+        cat(sprintf("No CSV file found in %s\n", zip_file))
+      }
+    }
+    
+    for (zip_file in zip_files) {
+      extract_csv(zip_file)
+    }
+    ```
+    \
+
+6. Concatenate the Data Files:
+
+    The script uses the $\texttt{data.table}$ package to read and concatenate the CSV files into a single dataframe. This dataframe is then saved as an RDS file in the $\texttt{data}$ folder of the repository. This final step consolidates all the data into one manageable file, making it readily accessible for further analysis. Saving the data as an RDS file also ensures that we can quickly load the preprocessed data in future sessions without repeating the entire download and extraction process.
+    
+    ```{r, eval=FALSE}
+    library(data.table)
+    
+    csv_files <- list.files(download_dir, 
+                            pattern = "\\d{4}_comptage_velo.csv", 
+                            full.names = TRUE)
+    
+    df <- rbindlist(lapply(csv_files, fread, sep = ";"), fill = TRUE)
+    saveRDS(df, file = "data/df.rds")
+    ```
+    
+    \
+By using this script, we ensure that the data is downloaded, extracted, and consolidated efficiently. In our main analysis, we simply load the preprocessed data from the RDS file, allowing us to focus on the analysis without worrying about the data preparation steps.
+
+## Pre-processing the Paris Bike Count Data
+
+After downloading and consolidating the bike count data, the next step involves pre-processing the data to prepare it for analysis. For this, we use the script $\texttt{preprocess_bike_data.R}$, which performs various cleaning and transformation tasks. This script also saves the pre-processed data in a structured format for easy access during analysis. Below is a detailed explanation of what is done and why each step is necessary.
+
+The first thing to be done, is to read the previously saved RDS file containing the consolidated bike count data. This step ensures that we are working with the cleaned and combined dataset.
+
+```{r, cache=FALSE}
+# Read the data
+df <- readRDS("data/df.rds")
+```
+
+Once this is done, we can take a look at our data like so:
+
+```{r}
+head(df)
+```
+
+The columns in the dataframe are renamed to simpler names for easier reference and manipulation throughout the script. This step improves code readability and reduces the chance of errors due to long column names.
+```{r, include=FALSE, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(lubridate)
+library(gridExtra)
+library(RColorBrewer)
+```
+
+
+```{r}
+# Rename columns for simplicity
+df <- df %>%
+  rename(
+    point_id = `Identifiant du point de comptage`,
+    point_name = `Nom du point de comptage`,
+    count = `Comptage horaire`,
+    datetime = `Date et heure de comptage`,
+    link = `Lien vers photo du point de comptage`,
+    coords = `Coordonnées géographiques`,
+    instal_date = `Date d'installation du point de comptage`
+  )
+```
+
+We can plot the counts for a couple of sensors to see what the data looks like.
+
+```{r}
+# Define the specific point_ids you're interested in
+specific_points <- c(100056045, 100044493)
+
+# Create and store ggplot objects for each point_id
+plots <- lapply(specific_points, function(point_id) {
+  df_subset <- df[df$point_id == point_id, ]
+  ggplot(df_subset, aes(x = datetime, y = count)) +
+    geom_line() +
+    labs(x = "Datetime", y = "Bike Count",
+         title = paste("Time Series Plot for Point", point_id)) +
+    theme_minimal()
+})
+
+# Print each plot
+for (plot in plots) {
+  print(plot)
+}
+```
+
+We can see that there might be counters like Nº100056045, which are counting zeroes for an unlikely period of time. For that, we will assume that if the count is equal to zero for 14 days or more, the sensor is not working properly, and thus we will not take it into account for our analysis.
+
+```{r}
+# Convert POSIXct to Date and sum daily count per point_id
+df_daily_sum <- df %>%
+  mutate(Date = as.Date(datetime)) %>%
+  group_by(Date, point_id) %>%
+  summarise(Total_Count = sum(count, na.rm = TRUE)) %>%
+  ungroup()
+
+# Function to find counters with 14-day rolling sum of Total_Count equal to 0
+find_filtered_counters <- function(df) {
+  df %>%
+    group_by(point_id) %>%
+    mutate(rolling_sum = rollsum(Total_Count == 0, 14, align = "right", fill = NA)) %>%
+    filter(rolling_sum == 14) %>%
+    summarize()
+}
+
+# Get filtered counters
+filtered_counters <- find_filtered_counters(df_daily_sum)
+
+# Filter df to exclude counters in filtered_counters
+filtered_df <- df %>%
+  anti_join(filtered_counters, by = "point_id") 
+```
+
+Using the identified inactive counters, the script filters the dataset to exclude these points. This step is crucial for maintaining the integrity of the analysis by removing potentially unreliable data. The filtered dataset is sorted by point ID and datetime, and then split into a list of dataframes, each corresponding to a unique comptage point. This structured format allows for easier and more efficient access to data for each point during analysis.
+
+```{r}
+# Sort data by point_id and datetime
+filtered_df <- filtered_df %>%
+  arrange(point_id, datetime)
+
+# Split data frame into a list of data frames by point_id
+df_list <- split(filtered_df, f = filtered_df$point_id)
+
+# Optionally, assign names to the list elements based on point_id
+names(df_list) <- paste("df_", names(df_list), sep = "")
+
+saveRDS(df_list, file = "data/df_list.rds")
+```
+
+By following these preprocessing steps, we ensure that our data is clean, consistent, and ready for analysis. This script prepares the dataset by addressing various data quality issues and structuring it in a way that facilitates effective analysis and forecasting.
+
+## Exploring the Bike Count Data
+
+After pre-processing, we have discarded a few counters. To see how many are left, we can run:
+
+```{r, include=FALSE, echo=FALSE, eval=FALSE}
+df_list <- readRDS("data/df_list.rds")
+```
+
+
+```{r}
+length(df_list)
+```
+
+To simplify the analysis, we are going to be working with data from only one of the counting points. Later on, we will replicate this to other locations.
+
+```{r}
+head(df_list$df_100003098)
+```
+
+```{r}
+summary(df_list$df_100003098)
+```
+
+We're interested in obtaining the number of bikes that go through a given point every hour, but the counters record the data in 15-minute intervals. Therefore, we aggregate the counts to get only 24 entries per day. Since the data is already stored in POSIXct format, we can do:
+
+```{r}
+# Aggregate data to hourly level
+bike_data <- df_list$df_100003098 %>%
+  mutate(hour = floor_date(datetime, "hour")) %>%
+  group_by(hour) %>%
+  summarize(count = sum(count))
+```
+
+Let's take a look at the series we're working with. The first thing we want to see is the entire series.
+
+```{r}
+theme_set(
+  theme_classic() +
+    theme(legend.position = "top")
+  )
+
+ggplot(bike_data, aes(x=hour, y=count))+
+  geom_line()+
+  labs(x = "Hour", y = "Count of Bicycles", title = "Bicycle Counts in Paris")
+```
+
+```{r}
+# Create new date-time variables
+bike_data <- bike_data %>%
+  mutate(
+    hour_numeric = as.numeric(format(hour, "%H")),  # Extract hour as numeric
+    week = week(hour),
+    day_of_month = day(hour),
+    month = factor(month(hour, label = TRUE, abbr = TRUE), levels = month.abb),
+    year = factor(year(hour)),
+    day = as.factor(format(hour, "%d")),
+    weekday = factor(weekdays(hour, abbreviate = TRUE)),
+    hour_in_week = hour_numeric + 
+      (match(weekday, c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")) - 1) * 24
+  )
+
+head(bike_data)
+```
+
+Let's zoom in to the counts for 2022.
+
+```{r}
+ggplot(subset(bike_data, year == 2022), aes(x = hour, y = count)) +
+  geom_line() +
+  labs(x = "Hour", y = "Count of Bicycles", title = "Bicycle Counts in 2022")
+```
+
+```{r, fig.width=14, fig.height=12}
+
+bike_data_avg <- bike_data %>%
+  group_by(month, hour_numeric) %>%
+  summarise(average_count = mean(count, na.rm = TRUE), .groups = "drop")
+
+my_palette <- brewer.pal(name="Blues",n=9)[4:9]
+
+# Plot
+ggplot(bike_data, aes(x = hour_numeric, y = count, 
+                      group = interaction(day, year), color = year)) +
+  geom_line(alpha = 0.2) +
+  geom_line(data = bike_data_avg, 
+            aes(x = hour_numeric, y = average_count, group = month), 
+            color = "black", size=1.2, alpha = 1) +
+  facet_wrap(~ month, scales = "free_y") +  # Create a separate plot for each month
+  labs(
+    title = "Hourly Count for Each Day by Month",
+    x = "Hour of the Day",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")+
+  scale_color_manual(values = my_palette)
+```
+
+```{r, fig.width=14, fig.height=12}
+# Create a dataframe with unique year-week identifiers and their sequential numbers
+df_all_weeks <- bike_data %>%
+  mutate(
+    year = factor(year(hour)),   # Ensure year is a factor
+    week = week(hour),           # Extract week number
+    year_week = paste(year, week, sep = "-")  # Unique identifier for each week
+  ) %>%
+  distinct(year_week) %>%
+  mutate(
+    week_total = row_number()  # Sequential numbering of weeks
+  ) %>%
+  select(year_week, week_total)  # Keep only the relevant columns
+
+# Join this week_total back to the original dataset and perform additional mutations
+df_all_weeks <- bike_data %>%
+  mutate(
+    hour_numeric = as.numeric(format(hour, "%H")),  # Extract hour as numeric
+    weekday = factor(weekdays(hour, abbreviate = TRUE), 
+                     levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")),
+    hour_in_week = hour_numeric + 
+      (match(weekday, c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")) - 1) * 24,
+    year = factor(year(hour)),   # Ensure year is a factor
+    week = week(hour),           # Extract week number
+    year_week = paste(year, week, sep = "-")  # Unique identifier for each week
+  ) %>%
+  left_join(df_all_weeks, by = "year_week")
+
+bike_data_avg <- df_all_weeks %>%
+  group_by(hour_in_week) %>%
+  summarize(avg_count = mean(count, na.rm = TRUE)) %>%
+  ungroup()
+
+# Plot the data
+ggplot() +
+  geom_line(data = df_all_weeks,  
+            aes(x = hour_in_week, y = count, color = year, group = week_total), 
+            alpha = 0.2, ) +  # Adjust alpha if needed
+  geom_line(data = bike_data_avg, 
+            aes(x = hour_in_week, y = avg_count), 
+            color = "black", size = 1.2) +  # Plot average line
+  labs(
+    title = "Hourly Counts Across All Weeks",
+    x = "Hour of the Week",
+    y = "Count",
+    color = "Year"
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 144, by = 24),  # Adjust to cover a full week
+    labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")+  # Show legend on the right
+  scale_color_manual(values = my_palette)
+```
+
